@@ -12,6 +12,7 @@ using Xbim.Common.Geometry;
 using Xbim.IfcRail.GeometricConstraintResource;
 using Xbim.IfcRail.GeometricModelResource;
 using Xbim.IfcRail.GeometryResource;
+using Xbim.IfcRail.Kernel;
 using Xbim.IfcRail.PresentationAppearanceResource;
 using Xbim.IfcRail.ProductExtension;
 using Xbim.IfcRail.ProfileResource;
@@ -52,30 +53,41 @@ namespace SampleCreator
             TransformPlacements();
         }
 
+        private IfcObjectPlacement _sitePlacement;
+        private IfcObjectPlacement sitePlacement => _sitePlacement ?? (_sitePlacement = i.FirstOrDefault<IfcSite>()?.ObjectPlacement);
+
+        private XbimMatrix3D GetMatrixRelativeToSite(IfcProduct product)
+        {
+            var lPlacement = product.ObjectPlacement as IfcLocalPlacement;
+            if (lPlacement?.RelativePlacement == null)
+                return XbimMatrix3D.Identity;
+
+            // get placement aggregated to the level of site (excluding site)
+            var matrix = lPlacement.RelativePlacement.ToMatrix3D();
+            while (lPlacement.PlacementRelTo != null && lPlacement.PlacementRelTo != sitePlacement)
+            {
+                lPlacement = lPlacement.PlacementRelTo as IfcLocalPlacement;
+                if (lPlacement == null)
+                    break;
+                matrix = matrix * lPlacement.RelativePlacement.ToMatrix3D();
+            }
+            return matrix;
+        }
+
         private void TransformPlacements()
         {
-            var sitePlacement = i.FirstOrDefault<IfcSite>()?.ObjectPlacement;
             foreach (var alignment in _alignments)
             {
                 var segments = alignment.Segments.ToList();
-                foreach (var kvp in alignment.Elements.Where(k => k.Value != null))
+                foreach (var element in alignment.Elements)
                 {
-                    var element = kvp.Key;
-                    var ifcElement = kvp.Value;
-
-                    var lPlacement = ifcElement.ObjectPlacement as IfcLocalPlacement;
-                    if (lPlacement?.RelativePlacement == null)
+                    // only transform local placements
+                    var lPlacement = element.ObjectPlacement as IfcLocalPlacement;
+                    if (lPlacement == null)
                         continue;
 
                     // get placement aggregated to the level of site (excluding site)
-                    var matrix = lPlacement.RelativePlacement.ToMatrix3D();
-                    while (lPlacement.PlacementRelTo != null && lPlacement.PlacementRelTo != sitePlacement)
-                    {
-                        lPlacement = lPlacement.PlacementRelTo as IfcLocalPlacement;
-                        if (lPlacement == null)
-                            break;
-                        matrix = matrix * lPlacement.RelativePlacement.ToMatrix3D();
-                    }
+                    var matrix = GetMatrixRelativeToSite(element);
 
                     var position = new XbimPoint3D(0, 0, 0);
                     position = matrix.Transform(position);
@@ -89,11 +101,12 @@ namespace SampleCreator
                     Intersection intersection = GetIntersection2D(segments, position);
                     if (intersection == null)
                     {
-                        Log.Warning($"Object placement for {ifcElement} could not be created because intersection was not found.");
+                        Log.Warning($"Object placement for {element} could not be created because intersection was not found.");
                         continue;
                     }
 
-                    ifcElement.ObjectPlacement = i.New<IfcLinearPlacement>(lp =>
+                    _model.Delete(element.ObjectPlacement);
+                    element.ObjectPlacement = i.New<IfcLinearPlacement>(lp =>
                     {
                         lp.Distance = i.New<IfcDistanceExpression>(d =>
                         {
@@ -144,12 +157,12 @@ namespace SampleCreator
                 // check if this is within the bounds of the segment
                 var diff = intersection - start;
                 var length = diff.Length;
-                var angle = GetAngle(diff);
+                var angle = GetBearing(diff);
                 var offset = point - intersection;
                 var bearing = Math.Atan2(offset.Y, offset.X) * 180.0 / Math.PI;
                 var sign = (bearing - segment.StartDirection) > 0.0 ? 1.0 : -1.0;
 
-                // identity - point is at the start of the curve
+                // identity - point is at the start or the end of the curve
                 if (length < 1e-5 || Math.Abs(length - segment.SegmentLength) < 1e-5)
                 {
                     return new Intersection
@@ -171,20 +184,18 @@ namespace SampleCreator
                 {
                     // it is possible that this is the first segment and the placement is
                     // slightly before the start of the segment.
-                    // We should axtend the first segment in that case.
+                    // We should extend the first segment backwards in that case.
                     if (segment == segments.First().CurveGeometry && length < 0.1 && IsOpositeDirection(angle, segment.StartDirection))
                     {
                         // move backwards
-                        MoveBack(segment, length);
+                        ExtendBack(segment, length);
+                        // try again, it should find the coincidence
                         return GetIntersection2D(segments, point);
                     }
 
                     distance += segment.SegmentLength;
                     continue;
                 }
-
-
-                
 
                 return new Intersection
                 {
@@ -195,7 +206,7 @@ namespace SampleCreator
             return null;
         }
 
-        private double GetAngle(XbimVector3D diff)
+        private double GetBearing(XbimVector3D diff)
         {
             var angle = Math.Atan2(diff.Y, diff.X) * 180.0 / Math.PI;
             // normalize the angle
@@ -206,12 +217,13 @@ namespace SampleCreator
             return angle;
         }
 
-        private void MoveBack(IfcLineSegment2D segment, double length)
+        private void ExtendBack(IfcLineSegment2D segment, double length)
         {
             var dir = (segment.StartDirection + 180.0) * Math.PI / 180.0;
             var dX = length * Math.Cos(dir);
             var dY = length * Math.Sin(dir);
 
+            // adjust the point
             segment.StartPoint.X += dX;
             segment.StartPoint.Y += dY;
             segment.SegmentLength += length;
@@ -310,10 +322,39 @@ namespace SampleCreator
                             // find IFC element
                             IfcGloballyUniqueId id = GetIfcGUID(element);
                             var ifcElement = i.FirstOrDefault<IfcBuildingElement>(e => e.GlobalId == id);
-                            record.Elements.Add(element, ifcElement);
+                            if (ifcElement != null)
+                                record.Elements.Add(ifcElement);
                         }
                     }
                 }
+            }
+
+            // find building elements which were not matched, possibly because they were not modelled with adaptive points
+            var notMatched = i.Where<IfcBuildingElement>(e => !_alignments.Any(a => a.Elements.Contains(e)))
+                .ToList();
+            foreach (var element in notMatched)
+            {
+                var matrix = GetMatrixRelativeToSite(element);
+                var position = matrix.Transform(new XbimPoint3D(0,0,0));
+
+                Intersection intersection = null;
+                AlignmentRecord record = null;
+                // find closes alignment intersection (if any)
+                foreach (var alignmentRecord in _alignments)
+                {
+                    var i = GetIntersection2D(alignmentRecord.Segments.ToList(), position);
+                    if (i == null)
+                        continue;
+                    if (intersection == null || intersection.OffsetLateral > i.OffsetLateral)
+                    {
+                        intersection = i;
+                        record = alignmentRecord;
+                    }
+                }
+
+                // we found one working so lets use it
+                if (record != null)
+                    record.Elements.Add(element);
             }
         }
 
@@ -451,7 +492,6 @@ namespace SampleCreator
                 c.Horizontal = i.New<IfcAlignment2DHorizontal>(h =>
                 {
                     // this should be set to what it actually is
-                    h.StartDistAlong = 0;
                     h.Segments.AddRange(segments);
                     h.StartDistAlong = startOffset;
                 });
@@ -539,6 +579,6 @@ namespace SampleCreator
         public List<PolyLine> Polylines { get; set; } = new List<PolyLine>();
         public IfcAlignment Alignment { get; set; }
         public IEnumerable<IfcAlignment2DHorizontalSegment> Segments => (Alignment?.Axis as IfcAlignmentCurve)?.Horizontal.Segments;
-        public Dictionary<Element, IfcBuildingElement> Elements { get; set; } = new Dictionary<Element, IfcBuildingElement>();
+        public HashSet<IfcBuildingElement> Elements { get; set; } = new HashSet<IfcBuildingElement>();
     }
 }
