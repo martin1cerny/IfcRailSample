@@ -108,9 +108,14 @@ namespace SampleCreator
 
             var products = model.Instances.OfType<IfcProduct>();
             var map = new XbimInstanceHandleMap(model, clean);
-            foreach (var product in products)
+
+            // speed up inverse lookups with inverse cache
+            using (model.BeginInverseCaching())
             {
-                clean.InsertCopy(product, map, null, true, true);
+                foreach (var product in products)
+                {
+                    clean.InsertCopy(product, map, null, true, true, true);
+                }
             }
             return clean;
         }

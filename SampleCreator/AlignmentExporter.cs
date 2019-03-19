@@ -15,6 +15,7 @@ using Xbim.IfcRail.GeometryResource;
 using Xbim.IfcRail.PresentationAppearanceResource;
 using Xbim.IfcRail.ProductExtension;
 using Xbim.IfcRail.ProfileResource;
+using Xbim.IfcRail.RailwayDomain;
 using Xbim.IfcRail.RepresentationResource;
 using Xbim.IfcRail.UtilityResource;
 
@@ -85,29 +86,12 @@ namespace SampleCreator
                     var xDir = new XbimVector3D(1, 0, 0);
                     xDir = matrix.Transform(xDir).Normalized();
 
-                    // find the segment
-                    // find the distance
-                    // find the offset
-                    // find the rotation
-                    Intersection intersection = null;
-                    var distance = 0d;
-                    foreach (var segment in segments)
-                    {
-                        var line = segment.CurveGeometry as IfcLineSegment2D;
-                        if (line == null)
-                            throw new NotSupportedException("Only line segments are supported now");
-                        intersection = GetIntersection2D(line, position);
-                        if (intersection != null)
-                            break;
-                        distance += line.SegmentLength;
-                    }
-
+                    Intersection intersection = GetIntersection2D(segments, position);
                     if (intersection == null)
                     {
                         Log.Warning($"Object placement for {ifcElement} could not be created because intersection was not found.");
                         continue;
                     }
-
 
                     ifcElement.ObjectPlacement = i.New<IfcLinearPlacement>(lp =>
                     {
@@ -115,7 +99,7 @@ namespace SampleCreator
                         {
                             d.AlongHorizontal = true;
                             d.OffsetVertical = position.Z;
-                            d.DistanceAlong = distance + intersection.DistanceAlong;
+                            d.DistanceAlong = intersection.DistanceAlong;
                             d.OffsetLateral = intersection.OffsetLateral;
                         });
                         lp.PlacementRelTo = sitePlacement;
@@ -130,57 +114,116 @@ namespace SampleCreator
             }
         }
 
-        private Intersection GetIntersection2D(IfcLineSegment2D segment, XbimPoint3D point)
+        private Intersection GetIntersection2D(List<IfcAlignment2DHorizontalSegment> segments, XbimPoint3D point)
         {
-            // 2D start point
-            var start = new XbimPoint3D(segment.StartPoint.X, segment.StartPoint.Y, 0);
-
-            // normal equation of the segment
-            var a = Math.Tan(segment.StartDirection * Math.PI / 180.0);
-            var b = start.Y - a * start.X;
-
-            var c = Math.Tan((segment.StartDirection + 90) * Math.PI / 180.0);
-            var d = point.Y - c * point.X;
-
-            var x = (d - b) / (a - c);
-            var y = c * x + d;
-
-            var intersection = new XbimPoint3D(x, y, 0);
-
-            // check if this is within the bounds of the segment
-            var diff = intersection - start;
-            var length = diff.Length;
-            if (length > segment.SegmentLength)
+            var distance = 0d;
+            foreach (var part in segments)
             {
-                return null;
-            }
+                var segment = part.CurveGeometry as IfcLineSegment2D;
+                if (segment == null)
+                    throw new NotSupportedException("Only line segments are supported now");
 
+                // make sure point is 2D
+                point = new XbimPoint3D(point.X, point.Y, 0);
+
+                // 2D start point
+                var start = new XbimPoint3D(segment.StartPoint.X, segment.StartPoint.Y, 0);
+
+                // normal equation of the segment
+                var a = Math.Tan(segment.StartDirection * Math.PI / 180.0);
+                var b = start.Y - a * start.X;
+
+                var c = Math.Tan((segment.StartDirection + 90) * Math.PI / 180.0);
+                var d = point.Y - c * point.X;
+
+                var x = (d - b) / (a - c);
+                var y = c * x + d;
+
+                var intersection = new XbimPoint3D(x, y, 0);
+
+                // check if this is within the bounds of the segment
+                var diff = intersection - start;
+                var length = diff.Length;
+                var angle = GetAngle(diff);
+                var offset = point - intersection;
+                var bearing = Math.Atan2(offset.Y, offset.X) * 180.0 / Math.PI;
+                var sign = (bearing - segment.StartDirection) > 0.0 ? 1.0 : -1.0;
+
+                // identity - point is at the start of the curve
+                if (length < 1e-5 || Math.Abs(length - segment.SegmentLength) < 1e-5)
+                {
+                    return new Intersection
+                    {
+                        DistanceAlong = length + distance,
+                        OffsetLateral = offset.Length * sign
+                    };
+                }
+
+                // intersection is beyond the end
+                if (length > segment.SegmentLength)
+                {
+                    distance += segment.SegmentLength;
+                    continue;
+                }
+
+                // intersection is before the start
+                if (Math.Abs(angle - segment.StartDirection) > 1e-5)
+                {
+                    // it is possible that this is the first segment and the placement is
+                    // slightly before the start of the segment.
+                    // We should axtend the first segment in that case.
+                    if (segment == segments.First().CurveGeometry && length < 0.1 && IsOpositeDirection(angle, segment.StartDirection))
+                    {
+                        // move backwards
+                        MoveBack(segment, length);
+                        return GetIntersection2D(segments, point);
+                    }
+
+                    distance += segment.SegmentLength;
+                    continue;
+                }
+
+
+                
+
+                return new Intersection
+                {
+                    DistanceAlong = length + distance,
+                    OffsetLateral = offset.Length * sign
+                };
+            }
+            return null;
+        }
+
+        private double GetAngle(XbimVector3D diff)
+        {
             var angle = Math.Atan2(diff.Y, diff.X) * 180.0 / Math.PI;
             // normalize the angle
             if (angle < 0.0)
                 angle += 360.0;
             if (angle > 360.0)
                 angle -= 360.0;
+            return angle;
+        }
 
-            if (Math.Abs(angle - segment.StartDirection) > 1e-5)
-            {
-                // it is possible that this is the first segment and the placement is
-                // slightly before the start of the segment.
-                // We should axtend the first segment in that case.
-                return null;
-            }
+        private void MoveBack(IfcLineSegment2D segment, double length)
+        {
+            var dir = (segment.StartDirection + 180.0) * Math.PI / 180.0;
+            var dX = length * Math.Cos(dir);
+            var dY = length * Math.Sin(dir);
 
+            segment.StartPoint.X += dX;
+            segment.StartPoint.Y += dY;
+            segment.SegmentLength += length;
+        }
 
-            var offset = point - intersection;
-            var bearing = Math.Atan2(offset.Y, offset.X) * 180.0 / Math.PI;
-            var sign = (bearing - segment.StartDirection) > 0.0 ? 1.0 : -1.0;
+        private bool IsOpositeDirection(double angleA, double angleB)
+        {
+            // positive diff
+            var diff = angleA > angleB ? angleA - angleB : angleB - angleA;
 
-            return new Intersection
-            {
-                DistanceAlong = length,
-                OffsetLateral = offset.Length * sign
-            };
-
+            // diff must be 180 to be oposite direction
+            return Math.Abs(diff - 180.0) < 1e-5;
         }
 
         private double GetDistance(XbimPoint3D a, IfcCartesianPoint b)
@@ -200,6 +243,7 @@ namespace SampleCreator
                     $"{e.Category.Name}: {e.Name}" :
                     e.UniqueId))
                .ToList();
+            var containment = i.FirstOrDefault<IfcRailwayPart>()?.ContainsElements.FirstOrDefault()?.RelatedElements;
             foreach (var group in imports)
             {
                 var name = group.Key;
@@ -226,6 +270,10 @@ namespace SampleCreator
                     });
                     a.Axis = GetAlignmentCurve(polylines, alignmentSettings?.StartOffset ?? 0);
                 });
+
+                // add alignment to the default railway part
+                containment?.Add(alignment);
+
                 var record = new AlignmentRecord
                 {
                     Alignment = alignment,

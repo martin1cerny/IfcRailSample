@@ -3,6 +3,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.IFC;
 using Autodesk.Revit.UI;
 using SampleGenerator;
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,7 +22,18 @@ namespace SampleCreator
         {
             var document = commandData?.Application?.ActiveUIDocument?.Document;
             if (document == null || document.IsFamilyDocument)
+            {
+                TaskDialog.Show("Information", "This tool only works for models, not for the family editor.");
                 return Result.Cancelled;
+            }
+
+            var path = document.PathName;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                TaskDialog.Show("Information", "File must be saved first.");
+                return Result.Cancelled;
+            }
+            Init.SetLogger(path);
 
             //export to IFC4 DTV
             var ifcPath = Path.ChangeExtension(document.PathName, ".ifc");
@@ -33,31 +45,34 @@ namespace SampleCreator
             using (var txn = new Transaction(document))
             {
                 txn.Start("Exporting to IFC");
+                Log.Information($"Exporting IFC: {ifcPath}");
                 document.Export(ifcDir, ifcFileName, ifcOptions);
+                Log.Information($"Exported IFC: {ifcPath}");
 
                 // keep it clean
                 txn.RollBack();
             }
 
+            Log.Information("Transforming the file (changing schema, removing unnecessary comments)");
             FileTransformations.MakeIfcRail(ifcPath);
 
             using (var model = ModelHelper.GetModel(ifcPath))
             {
                 using (var txn = model.BeginTransaction("Model enhancements"))
                 {
+                    Log.Information("Transforming the model: Changing entity types to IFC Rail entities");
                     TypeChanger.ChangeBuildingToRailway(model);
 
+                    Log.Information("Enriching the model: Exporting IfcAlignments from imported DWGs");
                     var alignment = new AlignmentExporter(document, model);
                     alignment.Export();
-
-                    Console.WriteLine("Ha!");
 
                     // enhance the model
                     txn.Commit();
                 }
 
-                
 
+                Log.Information("Saving transformed and enhanced IFC.");
                 using (var stream = File.Create(ifcPath))
                 {
                     //// after a lot of transformations is it a good idea to purge
@@ -73,7 +88,7 @@ namespace SampleCreator
             return Result.Succeeded;
         }
 
-        
+
 
         private static IFCExportConfiguration GetConfiguration()
         {
