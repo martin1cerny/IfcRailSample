@@ -190,56 +190,19 @@ namespace SampleCreator
                     if (pVal == null) continue;
 
                     //it might be uninitialized optional item set
-                    var optSet = pVal as IOptionalItemSet;
-                    if (optSet != null && !optSet.Initialized) continue;
+                    if (pVal is IOptionalItemSet optSet && !optSet.Initialized)
+                        continue;
 
                     //or it is non-optional item set implementing IList
-                    var itemSet = pVal as IList;
-                    if (itemSet != null)
+                    if (pVal is IList itemSet)
                     {
-                        if (itemSet.Contains(entity))
-                            itemSet.Remove(entity);
+                        if (!itemSet.Contains(entity))
+                            continue;
+
+                        itemSet.Remove(entity);
                         if (replacement != null)
                             itemSet.Add(replacement);
-                        continue;
                     }
-
-                    //fall back operating on common list functions using reflection (this is slow)
-                    var contMethod = pInfo.PropertyType.GetMethod("Contains");
-                    if (contMethod == null)
-                    {
-                        var msg =
-                            string.Format(
-                                "It wasn't possible to check containment of entity {0} in property {1} of {2}. No suitable method found.",
-                                entity.GetType().Name, pInfo.Name, toCheck.GetType().Name);
-                        throw new XbimException(msg);
-                    }
-                    var contains = (bool)contMethod.Invoke(pVal, new object[] { entity });
-                    if (!contains) continue;
-                    var removeMethod = pInfo.PropertyType.GetMethod("Remove");
-                    if (removeMethod == null)
-                    {
-                        var msg =
-                            string.Format(
-                                "It wasn't possible to remove reference to entity {0} in property {1} of {2}. No suitable method found.",
-                                entity.GetType().Name, pInfo.Name, toCheck.GetType().Name);
-                        throw new XbimException(msg);
-                    }
-                    removeMethod.Invoke(pVal, new object[] { entity });
-
-                    if (replacement == null)
-                        continue;
-
-                    var addMethod = pInfo.PropertyType.GetMethod("Add");
-                    if (addMethod == null)
-                    {
-                        var msg =
-                            string.Format(
-                                "It wasn't possible to add reference to entity {0} in property {1} of {2}. No suitable method found.",
-                                entity.GetType().Name, pInfo.Name, toCheck.GetType().Name);
-                        throw new XbimException(msg);
-                    }
-                    addMethod.Invoke(pVal, new object[] { replacement });
                 }
             }
 

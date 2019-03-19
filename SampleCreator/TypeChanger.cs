@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Linq;
 using Xbim.Common;
 using Xbim.IfcRail.ProductExtension;
 using Xbim.IfcRail.RailwayDomain;
@@ -46,8 +42,34 @@ namespace SampleCreator
                 }
             }
 
+            // check rails
+            foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().Contains("Radlenker")).ToList())
+            {
+                var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
+                sleeper.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL;
+                ModelHelper.Replace(model, railings, sleeper);
+                model.Delete(railings);
+
+                var type = sleeper.IsTypedBy.FirstOrDefault()?.RelatingType;
+                if (type != null && !(type is IfcRailElementType))
+                {
+                    var sleeperType = ModelHelper.InsertCopy<IfcRailElementType>(model, type);
+                    sleeperType.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL;
+                    ModelHelper.Replace(model, type, sleeperType);
+                    model.Delete(type);
+                }
+            }
+
             // rail joints
-            foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().Contains("_Herzstück_")).ToList())
+            foreach (var railings in model.Instances.Where<IfcRailing>(r =>
+            {
+                var name = r.Name.ToString();
+                if (name.Contains("_Herzstück_"))
+                    return true;
+                if (name.Contains("_Herz_Ende_"))
+                    return true;
+                return false;
+            }).ToList())
             {
                 var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
                 sleeper.PredefinedType = IfcRailElementTypeEnum.JOINT;
@@ -64,7 +86,7 @@ namespace SampleCreator
                 }
             }
 
-            // sleepers
+            // rails
             foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().StartsWith("Schienen")).ToList())
             {
                 var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
