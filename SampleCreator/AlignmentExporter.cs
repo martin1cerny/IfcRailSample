@@ -2,6 +2,7 @@
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using Xbim.Common;
@@ -40,18 +41,28 @@ namespace SampleCreator
 
         public void Export()
         {
+            var w = Stopwatch.StartNew();
+
             // create alignments first
             CreateAlignments();
+            w.Stop();
+            Log.Information($"Alignments created in {w.ElapsedMilliseconds}ms");
 
             // match elements to alignments using addaptive points from Revit
+            w.Restart();
             MatchElementsToAlignments();
+            w.Stop();
+            Log.Information($"Elements matched to alignment curves in {w.ElapsedMilliseconds}ms");
 
             // transform local placements to linear placements
+            w.Restart();
             TransformPlacements();
+            w.Stop();
+            Log.Information($"Local placements replaced with linear placements in {w.ElapsedMilliseconds}ms");
         }
 
         private IfcObjectPlacement _sitePlacement;
-        private IfcObjectPlacement sitePlacement => _sitePlacement ?? (_sitePlacement = i.FirstOrDefault<IfcSite>()?.ObjectPlacement);
+        private IfcObjectPlacement SitePlacement => _sitePlacement ?? (_sitePlacement = i.FirstOrDefault<IfcSite>()?.ObjectPlacement);
 
         private XbimMatrix3D GetMatrixRelativeToSite(IfcProduct product)
         {
@@ -61,7 +72,7 @@ namespace SampleCreator
 
             // get placement aggregated to the level of site (excluding site)
             var matrix = lPlacement.RelativePlacement.ToMatrix3D();
-            while (lPlacement.PlacementRelTo != null && lPlacement.PlacementRelTo != sitePlacement)
+            while (lPlacement.PlacementRelTo != null && lPlacement.PlacementRelTo != SitePlacement)
             {
                 lPlacement = lPlacement.PlacementRelTo as IfcLocalPlacement;
                 if (lPlacement == null)
@@ -112,7 +123,7 @@ namespace SampleCreator
                             d.DistanceAlong = intersection.DistanceAlong;
                             d.OffsetLateral = intersection.OffsetLateral;
                         });
-                        lp.PlacementRelTo = sitePlacement;
+                        lp.PlacementRelTo = SitePlacement;
                         lp.PlacementMeasuredAlong = alignment.Alignment.Axis;
                         lp.Orientation = i.New<IfcOrientationExpression>(o =>
                         {
@@ -127,9 +138,9 @@ namespace SampleCreator
         private Intersection GetIntersection2D(List<IfcAlignment2DHorizontalSegment> segments, XbimPoint3D point)
         {
             var distance = 0d;
-            foreach (var part in segments)
+            foreach (var s in segments)
             {
-                var segment = part.CurveGeometry as IfcLineSegment2D;
+                var segment = s.CurveGeometry as IfcLineSegment2D;
                 if (segment == null)
                     throw new NotSupportedException("Only line segments are supported now");
 
@@ -156,7 +167,7 @@ namespace SampleCreator
                 var length = diff.Length;
                 var angle = GetBearing(diff);
                 var offset = point - intersection;
-                var bearing = Math.Atan2(offset.Y, offset.X) * 180.0 / Math.PI;
+                var bearing = GetBearing(offset);
                 var sign = (bearing - segment.StartDirection) > 0.0 ? 1.0 : -1.0;
 
                 // identity - point is at the start or the end of the curve

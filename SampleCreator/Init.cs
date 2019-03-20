@@ -8,13 +8,13 @@ namespace SampleCreator
     {
         public static void SetLogger(string path)
         {
-            path = Path.ChangeExtension(path, ".export.log");
+            path = Path.ChangeExtension(path, ".rail.log");
             //if (File.Exists(path))
             //    File.Delete(path);
 
             var config = new LoggerConfiguration()
                .Enrich.FromLogContext()
-               .WriteTo.File(path);
+               .WriteTo.File(path, shared: true);
 
             // set up default logger
             Log.Logger = config.CreateLogger();

@@ -6,6 +6,7 @@ using SampleGenerator;
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xbim.IfcRail;
@@ -58,10 +59,14 @@ namespace SampleCreator
 
             using (var model = ModelHelper.GetModel(ifcPath))
             {
+                var w = Stopwatch.StartNew();
                 using (var txn = model.BeginTransaction("Model enhancements"))
                 {
                     Log.Information("Transforming the model: Changing entity types to IFC Rail entities");
                     TypeChanger.ChangeBuildingToRailway(model);
+                    w.Stop();
+                    Log.Information($"Types changed in {w.ElapsedMilliseconds}ms");
+
 
                     Log.Information("Enriching the model: Exporting IfcAlignments from imported DWGs");
                     var alignment = new AlignmentExporter(document, model);
