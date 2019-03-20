@@ -97,21 +97,18 @@ namespace SampleCreator
                     // get placement aggregated to the level of site (excluding site)
                     var matrix = GetMatrixRelativeToSite(element);
 
-                    var position = new XbimPoint3D(0, 0, 0);
-                    position = matrix.Transform(position);
-
-                    var vertDir = new XbimVector3D(0, 0, 1);
-                    vertDir = matrix.Transform(vertDir).Normalized();
-
-                    var xDir = new XbimVector3D(1, 0, 0);
-                    xDir = matrix.Transform(xDir).Normalized();
-
-                    Intersection intersection = GetIntersection2D(segments, position);
+                    var position = matrix.Transform(new XbimPoint3D(0, 0, 0));
+                    var intersection = GetIntersection2D(segments, position);
                     if (intersection == null)
                     {
                         Log.Warning($"Object placement for {element} could not be created because intersection was not found.");
                         continue;
                     }
+
+                    // invert the matrix for the directions
+                    matrix.Invert();
+                    var vertDir = matrix.Transform(new XbimVector3D(0, 0, 1)).Normalized();
+                    var xDir = matrix.Transform(new XbimVector3D(1, 0, 0)).Normalized();
 
                     _model.Delete(element.ObjectPlacement);
                     element.ObjectPlacement = i.New<IfcLinearPlacement>(lp =>
