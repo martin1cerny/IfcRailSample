@@ -350,7 +350,7 @@ namespace SampleCreator
                     var i = GetIntersection2D(alignmentRecord.Segments.ToList(), position);
                     if (i == null)
                         continue;
-                    if (intersection == null || intersection.OffsetLateral > i.OffsetLateral)
+                    if (intersection == null || Math.Abs(intersection.OffsetLateral) > Math.Abs(i.OffsetLateral))
                     {
                         intersection = i;
                         record = alignmentRecord;

@@ -10,7 +10,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xbim.IfcRail;
+using Xbim.IfcRail.GeometricConstraintResource;
 using Xbim.IfcRail.Kernel;
+using Xbim.IfcRail.ProductExtension;
+using Xbim.IfcRail.RailwayDomain;
 using Xbim.IO.Memory;
 
 namespace SampleCreator
@@ -63,7 +66,7 @@ namespace SampleCreator
                 using (var txn = model.BeginTransaction("Model enhancements"))
                 {
                     Log.Information("Transforming the model: Changing entity types to IFC Rail entities");
-                    TypeChanger.ChangeBuildingToRailway(model);
+                    TypeChanger.ChangeTypes(model);
                     w.Stop();
                     Log.Information($"Types changed in {w.ElapsedMilliseconds}ms");
 
@@ -87,6 +90,29 @@ namespace SampleCreator
                     //}
                     model.SaveAsStep21(stream);
                 }
+
+                //using (var dump = new MemoryModel(model.EntityFactory))
+                //{
+                //    using (var txn = dump.BeginTransaction("TXN"))
+                //    {
+                //        var proj = model.Instances.FirstOrDefault<IfcProject>();
+                //        var toCopy = model.Instances.FirstOrDefault<IfcBuildingElement>(r => r.GlobalId == "1JZDJsxRbExvqqI9SWakKK");
+                //        var alignment = model.Instances.FirstOrDefault<IfcAlignment>(a => a.Axis == (toCopy.ObjectPlacement as IfcLinearPlacement).PlacementMeasuredAlong);
+                //        var map = new Xbim.Common.XbimInstanceHandleMap(model, dump);
+                //        dump.InsertCopy(proj, map, null, false, true, true);
+                //        dump.InsertCopy(toCopy, map, null, false, true, true);
+                //        dump.InsertCopy(alignment, map, null, false, true, true);
+                //        //foreach (var a in model.Instances.OfType<IfcAlignment>())
+                //        //    dump.InsertCopy(a, map, null, false, true, true);
+
+                //        txn.Commit();
+                //    }
+                //    var dumpFile = Path.ChangeExtension(ifcPath, ".dump.ifc");
+                //    using (var stream = File.Create(dumpFile))
+                //    {
+                //        dump.SaveAsStep21(stream);
+                //    }
+                //}
             }
 
             TaskDialog.Show("Finished", "Export and data transformation finished");

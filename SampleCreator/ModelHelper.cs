@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Serilog;
+using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -95,9 +96,27 @@ namespace SampleCreator
             var commonType = GetCommonAncestor(entity.ExpressType, replacement.ExpressType);
             var referingTypes = GetReferingTypes(model, commonType.Type);
             foreach (var referingType in referingTypes)
-                ReplaceReferences<IPersistEntity, IPersistEntity>(model, entity, referingType, replacement);
+                ReplaceReferences(model, entity, referingType, replacement);
         }
 
+        public static void Replace<TReplacement, TOriginal>(IModel model, IEnumerable<TOriginal> entities, Action<TOriginal, TReplacement> action = null)
+            where TReplacement : IPersistEntity, IInstantiableEntity
+            where TOriginal : IPersistEntity
+        {
+            var commonType = GetCommonAncestor(model.Metadata.ExpressType(typeof(TOriginal)), model.Metadata.ExpressType(typeof(TReplacement)));
+            var referingTypes = GetReferingTypes(model, commonType.Type);
+
+            var replacements = new Dictionary<IPersistEntity, IPersistEntity>();
+            foreach (var entity in entities)
+            {
+                var replacement = InsertCopy<TReplacement>(model, entity);
+                action?.Invoke(entity, replacement);
+                replacements.Add(entity, replacement);
+            }
+
+            foreach (var referingType in referingTypes)
+                ReplaceReferences(model, replacements, referingType);
+        }
 
         public static MemoryModel GetCleanModel(MemoryModel model)
         {
@@ -162,8 +181,7 @@ namespace SampleCreator
         /// <param name="entity">Entity to be removed from references</param>
         /// <param name="referingType">Candidate type containing reference to the type of entity</param>
         /// <param name="replacement">New reference. If this is null it just removes references to entity</param>
-        private static void ReplaceReferences<TEntity, TReplacement>(IModel model, TEntity entity, ReferingType referingType, TReplacement replacement)
-            where TEntity : IPersistEntity where TReplacement : TEntity
+        private static void ReplaceReferences(IModel model, IPersistEntity entity, ReferingType referingType, IPersistEntity replacement)
         {
             if (entity == null)
                 return;
@@ -181,7 +199,14 @@ namespace SampleCreator
 
                     //it is enough to compare references
                     if (!ReferenceEquals(pVal, entity)) continue;
-                    pInfo.SetValue(toCheck, replacement);
+                    try
+                    {
+                        pInfo.SetValue(toCheck, replacement);
+                    }
+                    catch (Exception)
+                    {
+                        Log.Warning($"Incompatible replacement: {toCheck.GetType().Name}.{pInfo.Name} Expected type: {pInfo.PropertyType.Name} Actual type: {replacement.GetType().Name}");
+                    }
                 }
 
                 foreach (var pInfo in referingType.ListReferences.Select(p => p.PropertyInfo))
@@ -196,16 +221,91 @@ namespace SampleCreator
                     //or it is non-optional item set implementing IList
                     if (pVal is IList itemSet)
                     {
-                        if (!itemSet.Contains(entity))
-                            continue;
-
-                        itemSet.Remove(entity);
-                        if (replacement != null)
-                            itemSet.Add(replacement);
+                        for (int i = 0; i < itemSet.Count; i++)
+                        {
+                            var item = itemSet[i];
+                            if (!ReferenceEquals(item, entity))
+                                continue;
+                            itemSet.RemoveAt(i);
+                            if (replacement != null)
+                            {
+                                try
+                                {
+                                    itemSet.Insert(i, replacement);
+                                }
+                                catch (Exception)
+                                {
+                                    Log.Warning($"Incompatible replacement: {toCheck.GetType().Name}.{pInfo.Name} Expected type: {pInfo.PropertyType.GenericTypeArguments[0].Name} Actual type: {replacement.GetType().Name}");
+                                }
+                            }
+                        }
                     }
                 }
             }
+        }
 
+        private static void ReplaceReferences(IModel model, Dictionary<IPersistEntity, IPersistEntity> replacements, ReferingType referingType)
+        {
+            //get all instances of this type and nullify and remove the entity
+            var entitiesToCheck = model.Instances.OfType(referingType.Type.Type.Name, true);
+            foreach (var toCheck in entitiesToCheck)
+            {
+                //check single value properties
+                foreach (var pInfo in referingType.SingleReferences.Select(p => p.PropertyInfo))
+                {
+                    var pVal = pInfo.GetValue(toCheck) as IPersistEntity;
+                    if (!replacements.TryGetValue(pVal, out IPersistEntity replacement))
+                        continue;
+
+                    try
+                    {
+                        pInfo.SetValue(toCheck, replacement);
+                    }
+                    catch (Exception)
+                    {
+                        Log.Warning($"Incompatible replacement: {toCheck.GetType().Name}.{pInfo.Name} Expected type: {pInfo.PropertyType.Name} Actual type: {replacement.GetType().Name}");
+                        // if it failed to replace, set to null to maintain referential integrity
+                        pInfo.SetValue(toCheck, null);
+                    }
+                }
+
+                // check list properties
+                foreach (var pInfo in referingType.ListReferences.Select(p => p.PropertyInfo))
+                {
+                    var pVal = pInfo.GetValue(toCheck);
+                    if (pVal == null) continue;
+
+                    //it might be uninitialized optional item set
+                    if (pVal is IOptionalItemSet optSet && !optSet.Initialized)
+                        continue;
+
+                    //or it is non-optional item set implementing IList
+                    if (pVal is IList itemSet)
+                    {
+                        for (int i = 0; i < itemSet.Count; i++)
+                        {
+                            if (!(itemSet[i] is IPersistEntity item))
+                                continue;
+                            
+                            if (!replacements.TryGetValue(item, out IPersistEntity replacement))
+                                continue;
+
+                            itemSet.RemoveAt(i);
+                            if (replacement != null)
+                            {
+                                try
+                                {
+                                    itemSet.Insert(i, replacement);
+                                }
+                                catch (Exception)
+                                {
+                                    Log.Warning($"Incompatible replacement: {toCheck.GetType().Name}.{pInfo.Name} Expected type: {pInfo.PropertyType.GenericTypeArguments[0].Name} Actual type: {replacement.GetType().Name}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>

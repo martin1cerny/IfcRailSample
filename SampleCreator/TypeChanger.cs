@@ -1,5 +1,8 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using Xbim.Common;
+using Xbim.IfcRail.ElectricalDomain;
+using Xbim.IfcRail.Kernel;
 using Xbim.IfcRail.ProductExtension;
 using Xbim.IfcRail.RailwayDomain;
 using Xbim.IfcRail.SharedBldgElements;
@@ -8,8 +11,10 @@ namespace SampleCreator
 {
     class TypeChanger
     {
-        public static void ChangeBuildingToRailway(IModel model)
+        public static void ChangeTypes(IModel model)
         {
+            var typeRels = model.Instances.OfType<IfcRelDefinesByType>().ToList();
+
             foreach (var building in model.Instances.OfType<IfcBuilding>().ToList())
             {
                 var railway = ModelHelper.InsertCopy<IfcRailway>(model, building);
@@ -23,6 +28,22 @@ namespace SampleCreator
                 ModelHelper.Replace(model, storey, railwayPart);
                 model.Delete(storey);
             }
+
+            // cable carriers "Kabelkanäle"
+            var cableCarriers = new HashSet<IfcBuildingElementProxy>(model
+                .Instances.Where<IfcBuildingElementProxy>(p => p.Name.ToString().StartsWith("Kabelkanäle")));
+            var cableCarrierTypes = typeRels
+                .Where(r => r.RelatedObjects.Any(o => o is IfcBuildingElementProxy p && cableCarriers.Contains(p)))
+                .Select(r => r.RelatingType)
+                .OfType<IfcBuildingElementProxyType>()
+                .ToList();
+            ModelHelper.Replace<IfcCableCarrierSegment, IfcBuildingElementProxy>(model, cableCarriers);
+            ModelHelper.Replace<IfcCableCarrierSegmentType, IfcBuildingElementProxyType>(model, cableCarrierTypes);
+            foreach (var cc in cableCarriers)
+                model.Delete(cc);
+            foreach (var cc in cableCarrierTypes)
+                model.Delete(cc);
+
 
             // sleepers
             foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().StartsWith("Betonschwelle")).ToList())
