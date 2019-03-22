@@ -17,20 +17,21 @@ using Xbim.IfcRail.ProfileResource;
 using Xbim.IfcRail.RailwayDomain;
 using Xbim.IfcRail.RepresentationResource;
 using Xbim.IfcRail.UtilityResource;
+using Xbim.IO.Memory;
 
 namespace SampleCreator
 {
     internal class AlignmentExporter
     {
         private readonly Document _document;
-        private readonly IModel _model;
+        private readonly MemoryModel _model;
         private IEntityCollection i => _model.Instances;
         private readonly List<AlignmentRecord> _alignments = new List<AlignmentRecord>();
         private readonly ExportSettings _settings;
         private readonly DisplayUnitType _lengthUnit;
         private readonly DisplayUnitType _angleUnit;
 
-        public AlignmentExporter(Document document, IModel model)
+        public AlignmentExporter(Document document, MemoryModel model)
         {
             _document = document;
             _model = model;
@@ -84,6 +85,8 @@ namespace SampleCreator
 
         private void TransformPlacements()
         {
+            var toRemove = new List<IfcLocalPlacement>();
+
             foreach (var alignment in _alignments)
             {
                 var segments = alignment.Segments.ToList();
@@ -128,8 +131,13 @@ namespace SampleCreator
                             o.LateralAxisDirection = i.New<IfcDirection>(d => d.SetXYZ(xDir.X, xDir.Y, xDir.Z));
                         });
                     });
+                    toRemove.Add(lPlacement);
                 }
             }
+
+            // remove unused local placements from the model
+            if (toRemove.Any())
+                _model.Delete(toRemove);
         }
 
         private Intersection GetIntersection2D(List<IfcAlignment2DHorizontalSegment> segments, XbimPoint3D point)
