@@ -6,83 +6,43 @@ using Xbim.IfcRail.Kernel;
 using Xbim.IfcRail.ProductExtension;
 using Xbim.IfcRail.RailwayDomain;
 using Xbim.IfcRail.SharedBldgElements;
+using Xbim.IO.Memory;
 
 namespace SampleCreator
 {
     class TypeChanger
     {
-        public static void ChangeTypes(IModel model)
+        public static void ChangeTypes(MemoryModel model)
         {
             var typeRels = model.Instances.OfType<IfcRelDefinesByType>().ToList();
+            var i = model.Instances;
 
-            foreach (var building in model.Instances.OfType<IfcBuilding>().ToList())
-            {
-                var railway = ModelHelper.InsertCopy<IfcRailway>(model, building);
-                ModelHelper.Replace(model, building, railway);
-                model.Delete(building);
-            }
+            model.Replace<IfcBuilding, IfcRailway>(i.OfType<IfcBuilding>());
+            model.Replace<IfcBuildingStorey, IfcRailwayPart>(i.OfType<IfcBuildingStorey>());
 
-            foreach (var storey in model.Instances.OfType<IfcBuildingStorey>().ToList())
-            {
-                var railwayPart = ModelHelper.InsertCopy<IfcRailwayPart>(model, storey);
-                ModelHelper.Replace(model, storey, railwayPart);
-                model.Delete(storey);
-            }
 
             // cable carriers "Kabelkanäle"
-            var cableCarriers = new HashSet<IfcBuildingElementProxy>(model
-                .Instances.Where<IfcBuildingElementProxy>(p => p.Name.ToString().StartsWith("Kabelkanäle")));
-            var cableCarrierTypes = typeRels
-                .Where(r => r.RelatedObjects.Any(o => o is IfcBuildingElementProxy p && cableCarriers.Contains(p)))
-                .Select(r => r.RelatingType)
-                .OfType<IfcBuildingElementProxyType>()
-                .ToList();
-            ModelHelper.Replace<IfcCableCarrierSegment, IfcBuildingElementProxy>(model, cableCarriers);
-            ModelHelper.Replace<IfcCableCarrierSegmentType, IfcBuildingElementProxyType>(model, cableCarrierTypes);
-            foreach (var cc in cableCarriers)
-                model.Delete(cc);
-            foreach (var cc in cableCarrierTypes)
-                model.Delete(cc);
+            var cableCarriers = i.Where<IfcBuildingElementProxy>(p => p.Name.ToString().StartsWith("Kabelkanäle")).ToList();
+            var cableCarrierTypes = GetTypes<IfcBuildingElementProxyType>(cableCarriers, typeRels);
+            model.Replace<IfcBuildingElementProxy, IfcCableCarrierSegment>(cableCarriers);
+            model.Replace<IfcBuildingElementProxyType, IfcCableCarrierSegmentType>(cableCarrierTypes);
 
 
             // sleepers
-            foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().StartsWith("Betonschwelle")).ToList())
-            {
-                var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
-                sleeper.PredefinedType = IfcRailElementTypeEnum.SLEEPER;
-                ModelHelper.Replace(model, railings, sleeper);
-                model.Delete(railings);
-
-                var type = sleeper.IsTypedBy.FirstOrDefault()?.RelatingType;
-                if (type != null && !(type is IfcRailElementType))
-                {
-                    var sleeperType = ModelHelper.InsertCopy<IfcRailElementType>(model, type);
-                    sleeperType.PredefinedType = IfcRailElementTypeEnum.SLEEPER;
-                    ModelHelper.Replace(model, type, sleeperType);
-                    model.Delete(type);
-                }
-            }
+            var sleepers = i.Where<IfcRailing>(r => r.Name.ToString().StartsWith("Betonschwelle")).ToList();
+            var sleeperTypes = GetTypes<IfcRailingType>(sleepers, typeRels);
+            model.Replace<IfcRailing, IfcRailElement>(sleepers, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.SLEEPER);
+            model.Replace<IfcRailingType, IfcRailElementType>(sleeperTypes, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.SLEEPER);
 
             // check rails
-            foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().Contains("Radlenker")).ToList())
-            {
-                var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
-                sleeper.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL;
-                ModelHelper.Replace(model, railings, sleeper);
-                model.Delete(railings);
+            var checkRails = i.Where<IfcRailing>(r => r.Name.ToString().Contains("Radlenker")).ToList();
+            var checkRailTypes = GetTypes<IfcRailingType>(checkRails, typeRels);
+            model.Replace<IfcRailing, IfcRailElement>(checkRails, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL);
+            model.Replace<IfcRailingType, IfcRailElementType>(checkRailTypes, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL);
 
-                var type = sleeper.IsTypedBy.FirstOrDefault()?.RelatingType;
-                if (type != null && !(type is IfcRailElementType))
-                {
-                    var sleeperType = ModelHelper.InsertCopy<IfcRailElementType>(model, type);
-                    sleeperType.PredefinedType = IfcRailElementTypeEnum.CHECK_RAIL;
-                    ModelHelper.Replace(model, type, sleeperType);
-                    model.Delete(type);
-                }
-            }
 
             // rail joints
-            foreach (var railings in model.Instances.Where<IfcRailing>(r =>
+            var railJoints = i.Where<IfcRailing>(r =>
             {
                 var name = r.Name.ToString();
                 if (name.Contains("_Herzstück_"))
@@ -90,58 +50,32 @@ namespace SampleCreator
                 if (name.Contains("_Herz_Ende_"))
                     return true;
                 return false;
-            }).ToList())
-            {
-                var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
-                sleeper.PredefinedType = IfcRailElementTypeEnum.JOINT;
-                ModelHelper.Replace(model, railings, sleeper);
-                model.Delete(railings);
+            }).ToList();
+            var railJointTypes = GetTypes<IfcRailingType>(railJoints, typeRels);
+            model.Replace<IfcRailing, IfcRailElement>(railJoints, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.JOINT);
+            model.Replace<IfcRailingType, IfcRailElementType>(railJointTypes, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.JOINT);
 
-                var type = sleeper.IsTypedBy.FirstOrDefault()?.RelatingType;
-                if (type != null && !(type is IfcRailElementType))
-                {
-                    var sleeperType = ModelHelper.InsertCopy<IfcRailElementType>(model, type);
-                    sleeperType.PredefinedType = IfcRailElementTypeEnum.JOINT;
-                    ModelHelper.Replace(model, type, sleeperType);
-                    model.Delete(type);
-                }
-            }
 
             // rails
-            foreach (var railings in model.Instances.Where<IfcRailing>(r => r.Name.ToString().StartsWith("Schienen")).ToList())
-            {
-                var sleeper = ModelHelper.InsertCopy<IfcRailElement>(model, railings);
-                sleeper.PredefinedType = IfcRailElementTypeEnum.RAIL;
-                ModelHelper.Replace(model, railings, sleeper);
-                model.Delete(railings);
-
-                var type = sleeper.IsTypedBy.FirstOrDefault()?.RelatingType;
-                if (type != null && !(type is IfcRailElementType))
-                {
-                    var sleeperType = ModelHelper.InsertCopy<IfcRailElementType>(model, type);
-                    sleeperType.PredefinedType = IfcRailElementTypeEnum.RAIL;
-                    ModelHelper.Replace(model, type, sleeperType);
-                    model.Delete(type);
-                }
-            }
+            var rails = i.Where<IfcRailing>(r => r.Name.ToString().Contains("Radlenker")).ToList();
+            var railTypes = GetTypes<IfcRailingType>(rails, typeRels);
+            model.Replace<IfcRailing, IfcRailElement>(checkRails, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.RAIL);
+            model.Replace<IfcRailingType, IfcRailElementType>(railTypes, (o, n) => n.PredefinedType = IfcRailElementTypeEnum.RAIL);
 
             // terrain
-            foreach (var proxy in model.Instances.Where<IfcBuildingElementProxy>(r => r.Name.ToString().StartsWith("DirectShape(Geometry = Surface, Category = Topography")).ToList())
-            {
-                var terrain = ModelHelper.InsertCopy<IfcGeographicElement>(model, proxy);
-                terrain.PredefinedType = IfcGeographicElementTypeEnum.TERRAIN;
-                ModelHelper.Replace(model, proxy, terrain);
-                model.Delete(proxy);
+            var terrain = i.Where<IfcBuildingElementProxy>(r => r.Name.ToString().StartsWith("DirectShape(Geometry = Surface, Category = Topography")).ToList();
+            var terrainTypes = GetTypes<IfcBuildingElementProxyType>(terrain, typeRels);
+            model.Replace<IfcBuildingElementProxy, IfcGeographicElement>(terrain, (o, t) => t.PredefinedType = IfcGeographicElementTypeEnum.TERRAIN);
+            model.Replace<IfcBuildingElementProxyType, IfcGeographicElementType>(terrainTypes, (o, t) => t.PredefinedType = IfcGeographicElementTypeEnum.TERRAIN);
+        }
 
-                var type = terrain.IsTypedBy.FirstOrDefault()?.RelatingType;
-                if (type != null && !(type is IfcRailElementType))
-                {
-                    var sleeperType = ModelHelper.InsertCopy<IfcGeographicElementType>(model, type);
-                    sleeperType.PredefinedType = IfcGeographicElementTypeEnum.TERRAIN;
-                    ModelHelper.Replace(model, type, sleeperType);
-                    model.Delete(type);
-                }
-            }
+        private static IEnumerable<T> GetTypes<T>(IEnumerable<IPersistEntity> entities, IEnumerable<IfcRelDefinesByType> typeRels)
+        {
+            var test = new HashSet<IPersistEntity>(entities);
+            return new HashSet<T>(typeRels
+                .Where(r => r.RelatedObjects.Any(o => test.Contains(o)))
+                .Select(r => r.RelatingType)
+                .OfType<T>());
         }
     }
 }
