@@ -254,49 +254,50 @@ namespace SampleCreator
                .OfClass(typeof(ImportInstance))
                .ToElements()
                .Cast<ImportInstance>()
-               .GroupBy(e =>
-                 _settings.Alignments.FirstOrDefault(a => a.Elements.Contains(e.Id.IntegerValue))?.Name ??
-                 (e.Category != null ?
-                    $"{e.Category.Name}: {e.Name}" :
-                    e.UniqueId))
                .ToList();
-            var containment = i.FirstOrDefault<IfcRailwayPart>()?.ContainsElements.FirstOrDefault()?.RelatedElements;
-            foreach (var group in imports)
+            var containment = i.FirstOrDefault<IfcSite>()?.ContainsElements.FirstOrDefault()?.RelatedElements;
+
+            foreach (var import in imports)
             {
-                var name = group.Key;
-                var polylines = OrderConnectedPolylines(group);
+                var name = import.Category != null ? $"{import.Category.Name}: {import.Name}" : import.UniqueId;
+
+                var geom = import.get_Geometry(new Options { DetailLevel = ViewDetailLevel.Medium, IncludeNonVisibleObjects = false, ComputeReferences = false });
+                var polylines = GetPolylines(geom).ToList();
+
                 if (polylines.Count == 0)
                     continue;
-                var alignmentSettings = _settings.Alignments.FirstOrDefault(a => a.Name == name);
-
-                // export as IfcAlignment and curve
-                var alignment = i.New<IfcAlignment>(a =>
+                foreach (var polyline in polylines)
                 {
-                    a.Name = name;
+                    // export as IfcAlignment and curve
+                    var alignment = i.New<IfcAlignment>(a =>
+                    {
+                        a.Name = name;
                     //a.GlobalId = GetIfcGUID(dwg);
                     a.Representation = i.New<IfcProductDefinitionShape>(r => r.Representations.Add(i.New<IfcShapeRepresentation>(s =>
-                    {
-                        s.ContextOfItems = ModelContext;
-                        s.Items.AddRange(GetSolids(polylines));
-                        SetRedStyle(s.Items);
-                    })));
-                    a.ObjectPlacement = i.New<IfcLocalPlacement>(op =>
-                    {
-                        op.PlacementRelTo = i.FirstOrDefault<IfcSite>()?.ObjectPlacement;
-                        op.RelativePlacement = i.New<IfcAxis2Placement3D>();
+                        {
+                            s.ContextOfItems = ModelContext;
+                            s.Items.Add(GetSolid(polyline));
+                            SetRedStyle(s.Items);
+                        })));
+                        a.ObjectPlacement = i.New<IfcLocalPlacement>(op =>
+                        {
+                            op.PlacementRelTo = i.FirstOrDefault<IfcSite>()?.ObjectPlacement;
+                            op.RelativePlacement = i.New<IfcAxis2Placement3D>();
+                        });
+                        a.Axis = GetAlignmentCurve(polyline, 0);
                     });
-                    a.Axis = GetAlignmentCurve(polylines, alignmentSettings?.StartOffset ?? 0);
-                });
 
-                // add alignment to the default railway part
-                containment?.Add(alignment);
+                    // add alignment to the default railway part
+                    containment?.Add(alignment);
 
-                var record = new AlignmentRecord
-                {
-                    Alignment = alignment,
-                    Polylines = polylines
-                };
-                _alignments.Add(record);
+                    var record = new AlignmentRecord
+                    {
+                        Alignment = alignment,
+                        Polylines = polyline
+                    };
+                    _alignments.Add(record);
+                }
+
             }
         }
 
@@ -340,7 +341,7 @@ namespace SampleCreator
             foreach (var element in notMatched)
             {
                 var matrix = GetMatrixRelativeToSite(element);
-                var position = matrix.Transform(new XbimPoint3D(0,0,0));
+                var position = matrix.Transform(new XbimPoint3D(0, 0, 0));
 
                 Intersection intersection = null;
                 AlignmentRecord record = null;
@@ -414,9 +415,9 @@ namespace SampleCreator
             return ordered;
         }
 
-        private bool ArePointsOnCurve(IEnumerable<PolyLine> polylines, List<ReferencePoint> points)
+        private bool ArePointsOnCurve(PolyLine polyline, List<ReferencePoint> points)
         {
-            return points.All(p => polylines.Any(polyline => IsPointOnCurve(polyline, p)));
+            return points.All(p => IsPointOnCurve(polyline, p));
         }
 
         private bool IsPointOnCurve(PolyLine polyline, ReferencePoint point)
@@ -461,11 +462,9 @@ namespace SampleCreator
             return new XYZ(FromFeets(p.X), FromFeets(p.Y), 0);
         }
 
-        private IfcAlignmentCurve GetAlignmentCurve(List<PolyLine> lines, double startOffset)
+        private IfcAlignmentCurve GetAlignmentCurve(PolyLine line, double startOffset)
         {
-            var points = lines
-                .SelectMany(l => l.GetCoordinates())
-                .ToList();
+            var points = line.GetCoordinates();
             var segments = new List<IfcAlignment2DHorizontalSegment>();
             for (int j = 0; j < points.Count - 1; j++)
             {
@@ -521,19 +520,16 @@ namespace SampleCreator
         private IfcRectangleProfileDef _rectProfile;
         private IfcRectangleProfileDef RectProfile => _rectProfile ?? (_rectProfile = i.New<IfcRectangleProfileDef>(r => { r.ProfileType = IfcProfileTypeEnum.AREA; r.XDim = 0.02; r.YDim = 0.02; }));
 
-        private IEnumerable<IfcFixedReferenceSweptAreaSolid> GetSolids(IEnumerable<PolyLine> polylines)
+        private IfcFixedReferenceSweptAreaSolid GetSolid(PolyLine polyline)
         {
-            return polylines.Select(polyline =>
+            var points = polyline.GetCoordinates().Select(c => GetPoint3D(c));
+            return i.New<IfcFixedReferenceSweptAreaSolid>(s =>
             {
-                var points = polyline.GetCoordinates().Select(c => GetPoint3D(c));
-                return i.New<IfcFixedReferenceSweptAreaSolid>(s =>
+                s.SweptArea = RectProfile;
+                s.FixedReference = ZDirection;
+                s.Directrix = i.New<IfcPolyline>(p =>
                 {
-                    s.SweptArea = RectProfile;
-                    s.FixedReference = ZDirection;
-                    s.Directrix = i.New<IfcPolyline>(p =>
-                    {
-                        p.Points.AddRange(points);
-                    });
+                    p.Points.AddRange(points);
                 });
             });
         }
@@ -581,7 +577,7 @@ namespace SampleCreator
 
     internal class AlignmentRecord
     {
-        public List<PolyLine> Polylines { get; set; } = new List<PolyLine>();
+        public PolyLine Polylines { get; set; }
         public IfcAlignment Alignment { get; set; }
         public IEnumerable<IfcAlignment2DHorizontalSegment> Segments => (Alignment?.Axis as IfcAlignmentCurve)?.Horizontal.Segments;
         public HashSet<IfcBuildingElement> Elements { get; set; } = new HashSet<IfcBuildingElement>();
