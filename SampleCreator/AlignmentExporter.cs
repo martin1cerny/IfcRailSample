@@ -258,12 +258,13 @@ namespace SampleCreator
 
         private void CreateAlignments()
         {
+            var site = i.FirstOrDefault<IfcSite>();
             var imports = new FilteredElementCollector(_document)
                .OfClass(typeof(ImportInstance))
                .ToElements()
                .Cast<ImportInstance>()
                .ToList();
-            var containment = i.FirstOrDefault<IfcSite>()?.ContainsElements.FirstOrDefault()?.RelatedElements;
+            var containment = site?.ContainsElements.FirstOrDefault()?.RelatedElements ?? i.New<IfcRelContainedInSpatialStructure>(r => r.RelatingStructure = site ).RelatedElements;
 
             foreach (var import in imports)
             {
